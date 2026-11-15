@@ -355,14 +355,7 @@ class Banks:
         return self.envelope(OPENVERSE, items)
 
     def openverse_urls(self, identifier: str, size: int):
-        if not UUID.match(identifier):
-            raise BankError(422, "bank_invalid_id")
-        row = self.recall(OPENVERSE, identifier)
-        if row is None:
-            row = get_json(f"{OPENVERSE_API}{identifier}/")
-            if not isinstance(row, dict) or str(row.get("license") or "").lower() not in OPENVERSE_LICENSES:
-                raise BankError(404, "bank_not_found")
-            self.remember(OPENVERSE, identifier, row)
+        row = self.openverse_row(identifier)
         return [row.get("thumbnail")] if size <= 300 else [row.get("url"), row.get("thumbnail")]
 
     # --- Icones (Iconify) ---
@@ -434,13 +427,66 @@ class Banks:
         return self.envelope(OPENVERSE_AUDIO, items)
 
     def sound(self, identifier: str) -> tuple[bytes, str]:
-        if not UUID.match(identifier):
-            raise BankError(422, "bank_invalid_id")
-        row = self.recall(OPENVERSE_AUDIO, identifier)
-        if row is None:
-            row = get_json(f"{SOUND_API}{identifier}/")
-            if not self.sound_usable(row, 10 ** 9):
-                raise BankError(404, "bank_not_found")
-            self.remember(OPENVERSE_AUDIO, identifier, row)
+        row = self.openverse_row(identifier, audio=True)
         _, data = safe_get(str(row["url"]), limit=self.max_sound_bytes, allow=sound_host_ok)
         return data, sniff_sound(data)
+
+    # --- Importación (descarga completa + crédito), para aplicaciones que guardan el recurso en el servidor ---
+    def credit_of(self, provider: str, identifier) -> str:
+        """Crédito de un recurso. Las búsquedas dejan los metadatos en caché; si faltan, se piden al proveedor."""
+        identifier = str(identifier)
+        if provider == ARASAAC:
+            if not identifier.isdigit() or not 0 < int(identifier) <= 10_000_000:
+                raise BankError(422, "bank_invalid_id")
+            return f"{ARASAAC_CREDIT} · {ARASAAC_SOURCE.format(identifier=int(identifier))}"[:300]
+        if provider == ICONS:
+            match = ICON_ID.match(identifier)
+            if not match or match.group("prefix") not in ICON_SETS:
+                raise BankError(422, "bank_invalid_id")
+            label, author, licence, _ = ICON_SETS[match.group("prefix")]
+            return f"{label} · {author} · {licence} · Iconify"[:300]
+        if provider == WIKIMEDIA:
+            list(self.wikimedia_urls(identifier, 500))  # rellena la caché
+            info = self.recall(WIKIMEDIA, identifier) or {}
+            artist = self.wiki_meta(info, "Artist") or "Wikimedia Commons"
+            licence = self.wiki_meta(info, "LicenseShortName") or "Licencia libre"
+            return f"{artist} · {licence} · Wikimedia Commons"[:300]
+        if provider == MET:
+            obj = self.met_object(identifier)
+            artist = plain(obj.get("artistDisplayName")) or "The Metropolitan Museum of Art"
+            date = plain(obj.get("objectDate"))
+            return (f"{artist} · {MET_LICENSE} · The Met" + (f" · {date}" if date else ""))[:300]
+        if provider in (OPENVERSE, OPENVERSE_AUDIO):
+            row = self.openverse_row(identifier, audio=provider == OPENVERSE_AUDIO)
+            return self.openverse_credit(row)
+        raise BankError(422, "bank_provider")
+
+    def title_of(self, provider: str, identifier) -> str:
+        if provider in (OPENVERSE, OPENVERSE_AUDIO):
+            row = self.openverse_row(str(identifier), audio=provider == OPENVERSE_AUDIO)
+            return plain(row.get("title"))[:300]
+        return ""
+
+    def import_asset(self, provider: str, identifier) -> tuple[bytes, str, str, str]:
+        """(bytes, tipo MIME, crédito, título) del recurso completo; los iconos llegan como SVG saneado."""
+        data, media_type = self.image(provider, str(identifier), 500)
+        return data, media_type, self.credit_of(provider, identifier), self.title_of(provider, identifier)
+
+    def openverse_row(self, identifier: str, audio: bool = False) -> dict:
+        provider = OPENVERSE_AUDIO if audio else OPENVERSE
+        if not UUID.match(identifier):
+            raise BankError(422, "bank_invalid_id")
+        row = self.recall(provider, identifier)
+        if row is None:
+            row = get_json(f"{SOUND_API if audio else OPENVERSE_API}{identifier}/")
+            valid = self.sound_usable(row, 10 ** 9) if audio else (
+                isinstance(row, dict) and str(row.get("license") or "").lower() in OPENVERSE_LICENSES)
+            if not valid:
+                raise BankError(404, "bank_not_found")
+            self.remember(provider, identifier, row)
+        return row
+
+    def openverse_credit(self, row: dict) -> str:
+        licence = self.ov_license(row)
+        return (plain(row.get("attribution")) or " · ".join(part for part in (
+            plain(row.get("creator")), licence, plain(row.get("source"))) if part))[:300]

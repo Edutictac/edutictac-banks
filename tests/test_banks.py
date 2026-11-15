@@ -165,3 +165,20 @@ def test_sound_bank_limits_prefix_and_download(net):
     with pytest.raises(BankError):
         banks.image("openverse-audio", good, 500)
     assert not any("evil.test" in c for c in calls)
+
+
+def test_import_asset_returns_credit_and_title(net):
+    routes, _ = net
+    banks = Banks()
+    routes["https://static.arasaac.org/pictograms/9/9_500.png"] = httpx.Response(200, content=PNG)
+    data, media, credit, title = banks.import_asset("arasaac", 9)
+    assert (data, media) == (PNG, "image/png") and "ARASAAC" in credit and "arasaac.org/pictograms/9" in credit
+    good = "11111111-1111-1111-1111-111111111111"
+    routes[f"https://api.openverse.org/v1/images/{good}/"] = j({"id": good, "license": "by", "license_version": "4.0", "title": "Gat", "creator": "Ana",
+                                                               "url": "https://cdn.example/big.jpg", "thumbnail": "https://cdn.example/t.jpg"})
+    routes["https://cdn.example/big.jpg"] = httpx.Response(200, content=JPEG)
+    data, media, credit, title = banks.import_asset("openverse", good)
+    assert media == "image/jpeg" and "Ana" in credit and title == "Gat"
+    with pytest.raises(BankError):
+        banks.credit_of("openverse", "no-es-uuid")
+    assert "Iconify" in banks.credit_of("icons", "lucide:home")
