@@ -32,7 +32,7 @@ códigos estables (`bank_unavailable`, `bank_timeout`, `bank_too_large`, `bank_i
 - Caché en memoria por instancia y limitador de ritmo opcional (`Banks.rate(owner)`).
 
 ## Uso en las aplicaciones
-Se copia el directorio `edutictac_banks/` dentro de cada aplicación (`scripts/sync-banks.sh`), igual que
+Se copia el directorio `edutictac_banks/` dentro de cada aplicación (`scripts/sync-banks.sh <destino>`), igual que
 `@edutictac/rebost-client`. Todas las importaciones son relativas. Las pruebas de cada aplicación usan
 `edutictac_banks.testing.install(monkeypatch, handler)`: sin red ni DNS reales; el `handler` ve la URL lógica.
 
